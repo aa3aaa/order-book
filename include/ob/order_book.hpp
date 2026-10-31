@@ -18,12 +18,21 @@ class OrderBook {
         // Every execution is reported through on_trade, in the order it happens.
         explicit OrderBook(TradeCallback on_trade = {});
 
-        // Rests the order (matching comes in step 4). Returns the quantity left
-        // resting. Assigns the sequence number. Ids must be unique among resting orders.
+        // Matches the order against the opposite side, then rests any remainder
+        // if it is a Limit order. Returns the quantity left resting: 0 if fully
+        // filled, or if the remainder was cancelled because the order was Market
+        // or IOC. Assigns the sequence number; orders with qty <= 0 are ignored.
+        // Ids must be unique among resting orders.
         Quantity add(Order order);
 
         // Removes a resting order. False if no order with that id is resting.
         bool cancel(OrderId id);
+
+        // Changes a resting order. Keeps its queue position only if the price is
+        // unchanged and the quantity does not go up; otherwise the order is
+        // cancelled and re-added as a new Limit order, which may match at once.
+        // False if the id is unknown or new_qty <= 0 (the book is unchanged).
+        bool modify(OrderId id, Price new_price, Quantity new_qty);
 
         std::optional<LevelView> best_bid() const;
         std::optional<LevelView> best_ask() const;
@@ -46,6 +55,12 @@ class OrderBook {
         using Bids = std::map<Price, Level, std::greater<>>;  // highest price first
         using Asks = std::map<Price, Level>;                  // lowest price first
 
+        // Executes every trade the taker can make against book (the opposite
+        // side), reporting each one and removing filled makers.
+        template <class Book>
+        void match(Order& taker, Book& book);
+
+        // Puts an order with quantity left at the back of its price level.
         void rest(Order order);
 
         Bids bids_;

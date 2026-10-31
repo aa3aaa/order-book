@@ -6,7 +6,7 @@ A limit order book and matching engine in C++20: price-time priority, limit / ma
 
 - [x] Build system (CMake 3.21+, GoogleTest via FetchContent, optional ASan/UBSan build)
 - [x] Core book: rest, cancel, best bid/ask, depth
-- [ ] Matching: limit, market, IOC; modify
+- [x] Matching: limit, market, IOC; modify
 - [ ] Reference book + differential test (100k random ops)
 - [ ] Replay tool (CSV in, trades out)
 - [ ] Benchmark harness (p50 / p99 / p99.9)
