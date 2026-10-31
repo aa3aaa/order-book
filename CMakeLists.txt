@@ -20,3 +20,8 @@ endif()
 
 enable_testing()
 add_subdirectory(tests)
+
+# Replay tool: CSV of orders in, trades and final book out.
+add_executable(replay src/replay/main.cpp)
+target_link_libraries(replay PRIVATE orderbook)
+add_test(NAME replay_sample COMMAND replay ${CMAKE_CURRENT_SOURCE_DIR}/data/sample.csv)

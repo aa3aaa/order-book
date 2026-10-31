@@ -1,0 +1,17 @@
+# A,id,side,price,qty   limit order (side is B or S)
+# M,id,side,qty         market order
+# I,id,side,price,qty   immediate-or-cancel
+# C,id                  cancel
+# X,id,price,qty        modify
+# Prices are integer ticks (cents).
+A,1,S,100,10
+A,2,S,101,5
+A,3,B,100,4
+X,1,100,3
+M,4,B,6
+C,2
+A,5,B,99,8
+A,6,B,98,3
+A,7,S,103,6
+I,8,S,99,10
+A,9,S,102,4
