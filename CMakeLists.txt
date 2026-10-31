@@ -10,13 +10,22 @@ endif()
 
 option(OB_SANITIZE "AddressSanitizer + UBSan" OFF)
 
-add_library(orderbook src/order_book.cpp)
-target_include_directories(orderbook PUBLIC include)
-target_compile_options(orderbook PUBLIC -Wall -Wextra -Wpedantic -Wshadow)
-if(OB_SANITIZE)
-  target_compile_options(orderbook PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer -g)
-  target_link_options(orderbook PUBLIC -fsanitize=address,undefined)
-endif()
+# The book is built twice: `orderbook` allocates list nodes from the pool
+# allocator (the default), `orderbook_nopool` uses plain operator new. Both
+# run the full test suite; the benchmark is built against each to compare.
+function(ob_add_library name use_pool)
+  add_library(${name} src/order_book.cpp)
+  target_include_directories(${name} PUBLIC include)
+  target_compile_definitions(${name} PUBLIC OB_USE_POOL=${use_pool})
+  target_compile_options(${name} PUBLIC -Wall -Wextra -Wpedantic -Wshadow)
+  if(OB_SANITIZE)
+    target_compile_options(${name} PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    target_link_options(${name} PUBLIC -fsanitize=address,undefined)
+  endif()
+endfunction()
+
+ob_add_library(orderbook 1)
+ob_add_library(orderbook_nopool 0)
 
 enable_testing()
 add_subdirectory(tests)
@@ -26,6 +35,8 @@ add_executable(replay src/replay/main.cpp)
 target_link_libraries(replay PRIVATE orderbook)
 add_test(NAME replay_sample COMMAND replay ${CMAKE_CURRENT_SOURCE_DIR}/data/sample.csv)
 
-# Latency benchmark. Always run it from the Release build.
+# Latency benchmark, with and without the pool. Always run from the Release build.
 add_executable(bench bench/bench.cpp)
 target_link_libraries(bench PRIVATE orderbook)
+add_executable(bench_nopool bench/bench.cpp)
+target_link_libraries(bench_nopool PRIVATE orderbook_nopool)

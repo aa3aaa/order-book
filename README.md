@@ -10,7 +10,7 @@ A limit order book and matching engine in C++20: price-time priority, limit / ma
 - [x] Reference book + differential test (100k random ops)
 - [x] Replay tool (CSV in, trades out)
 - [x] Benchmark harness (p50 / p99 / p99.9)
-- [ ] Pool allocator for order nodes, measured against `new`
+- [x] Pool allocator for order nodes, measured against `new`
 
 ## Matching rules
 

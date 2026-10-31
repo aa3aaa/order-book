@@ -5,7 +5,14 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include "ob/pool_allocator.hpp"
 #include "ob/types.hpp"
+
+// 1: order-list nodes come from a fixed-size pool (default). 0: plain operator new.
+// Set by CMake per library target; both builds pass the same tests.
+#ifndef OB_USE_POOL
+#define OB_USE_POOL 1
+#endif
 
 namespace ob {
 
@@ -43,14 +50,19 @@ class OrderBook {
         std::size_t order_count() const noexcept { return index_.size(); }
 
     private:
+#if OB_USE_POOL
+        using OrderList = std::list<Order, PoolAllocator<Order>>;
+#else
+        using OrderList = std::list<Order>;
+#endif
         struct Level {
             Quantity total{0};
-            std::list<Order> orders;  // FIFO: front is the oldest
+            OrderList orders;  // FIFO: front is the oldest
         };
         struct Handle {
             Side side;
             Price price;
-            std::list<Order>::iterator it;  // points at the order's own node
+            OrderList::iterator it;  // points at the order's own node
         };
         using Bids = std::map<Price, Level, std::greater<>>;  // highest price first
         using Asks = std::map<Price, Level>;                  // lowest price first

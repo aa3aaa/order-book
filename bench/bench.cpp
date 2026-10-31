@@ -22,10 +22,6 @@
 
 #include "ob/order_book.hpp"
 
-#ifndef OB_USE_POOL
-#define OB_USE_POOL 0
-#endif
-
 namespace {
 
 using Clock = std::chrono::steady_clock;
