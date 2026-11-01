@@ -4,7 +4,7 @@
 
 A limit order book and matching engine in C++20: price-time priority, limit / market / IOC orders, O(1) cancel and modify through an order-id index, and tick-indexed price levels. It is checked by 35 GoogleTest unit tests, 5 allocator tests and two differential tests against a naive reference book (100,000 operations in a narrow band, 30,000 with wide, drifting prices), and measured by a latency benchmark with and without a custom pool allocator.
 
-**Results** (Apple Silicon Mac, Linux VM, GCC 11.4, `-O3`): **38.4 M ops/s**; resting add mean 44 ns, p99 125 ns, p99.9 209 ns; worst single operation 14–26 µs over 1M operations. That is up from 20.7 M ops/s and 0.6–0.8 ms worst-case before the latency work described [below](#benchmark).
+**Results** (MacBook Air, Apple Silicon, native macOS, Apple Clang 21, `-O3`): **44.7 M ops/s**; resting add mean 22.5 ns; worst single operation 11–19 µs over 1M operations. That is up from 20.7 M ops/s and 0.6–0.8 ms worst-case before the latency work described [below](#benchmark).
 
 ## Using the order book
 
@@ -148,9 +148,32 @@ data/sample.csv                example replay input
 
 **Method.** One million operations are generated up front from a seeded RNG (70% limit adds with prices ~ Normal(10,000, 30) ticks and quantity 1–100; 20% cancels and 10% modifies of one of the last 1,024 ids added, some of which have already filled), so generation is never timed. 100,000 warm-up operations run first; the book peaks at about 110,000 resting orders. Each timed operation is bracketed by `std::chrono::steady_clock::now()`, and adds are split into those that rested without trading and those that traded. Throughput comes from a second, untimed pass over the same operations on a fresh book. The whole measurement runs three times on fresh books and the median run by throughput is reported.
 
-**Machine.** Apple Silicon Mac, inside a 4-vCPU aarch64 Ubuntu 22.04 VM; GCC 11.4, `-O3 -DNDEBUG` (CMake Release), otherwise idle. Every row below was measured in one session, building each commit in turn.
+### Native macOS, current version (median run of 3)
 
-### What each change bought (pool build, median of 3 runs)
+MacBook Air (Apple Silicon), macOS, Apple Clang 21.0 (`clang-2100.3.34.2`), `-O3 -DNDEBUG` (CMake Release).
+
+| Build | Throughput | Resting add mean | Mean − overhead | Worst single op (3 runs) |
+| --- | ---: | ---: | ---: | ---: |
+| pool allocator + `reserve()` | **44.7 M ops/s** | **22.5 ns** | 9.0 ns | **11–19 µs** |
+| plain `operator new` + `reserve()` | 29.4 M ops/s | 37.3 ns | 23.8 ns | 13–18 µs |
+| pool allocator, no `reserve()` | 29.8 M ops/s | 33.1 ns | 19.5 ns | 0.71–0.79 ms |
+
+| Operation (pool build) | Count | Mean (ns) | Mean − clock overhead (ns) | p99 (ns) | p99.9 (ns) | Max (ns) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| add, rests (no trade) | 399,509 | 22.5 | 9.0 | 42 | 792 | 11,916 |
+| add, trades | 300,468 | 28.3 | 14.9 | 84 | 791 | 12,916 |
+| cancel | 200,129 | 17.6 | 4.2 | 42 | 750 | 18,750 |
+| modify | 99,894 | 19.1 | 5.7 | 83 | 708 | 3,458 |
+
+- Natively, the pool is worth **52%** more throughput (44.7 vs 29.4 M ops/s), against 35% in the Linux VM, which suggests each `malloc` call costs more on macOS than under glibc.
+- `reserve()` matters here too: without it the worst op is back to ~0.75 ms and throughput falls by a third.
+- p50 is omitted: most operations finish inside one 41.7 ns clock tick, so their start and end timestamps often fall in the same tick and p50 reads as 0. The mean is the meaningful per-operation figure.
+- The ~750–790 ns p99.9 appears in **every** operation type in the reported run, while the other two runs measured 167–208 ns for resting adds. A tail that hits everything at once points at the machine (macOS scheduling, or moving the process between performance and efficiency cores, which macOS does not let a program pin) rather than at the book's code.
+- The op stream is not bit-identical to the Linux runs below (606,442 trades here vs 607,762): `std::normal_distribution` and `std::uniform_int_distribution` are implemented differently by libc++ and libstdc++, so the same seed gives a statistically identical but not identical workload.
+
+### History of the latency work (Linux VM, pool build, median of 3 runs)
+
+Apple Silicon Mac, inside a 4-vCPU aarch64 Ubuntu 22.04 VM; GCC 11.4, `-O3 -DNDEBUG` (CMake Release), otherwise idle. Every row was measured in one session, building each commit in turn, so the rows compare with each other.
 
 | Version | Throughput | Resting add mean | Resting add p99 | Resting add p99.9 | Worst single op (3 runs) |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -160,7 +183,7 @@ data/sample.csv                example replay input
 
 The same steps with plain `operator new` instead of the pool: 19.6 → 22.7 → 28.4 M ops/s, worst op 1.3–2.7 ms → 13–36 µs → 14–94 µs. At the final version the pool is worth 35% more throughput (38.4 vs 28.4 M ops/s).
 
-### Current version in full (pool build, median run)
+### Current version in full (Linux VM, pool build, median run)
 
 | Operation | Count | Mean (ns) | Mean − clock overhead (ns) | p50 (ns) | p99 (ns) | p99.9 (ns) | Max (ns) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -173,10 +196,10 @@ The same steps with plain `operator new` instead of the pool: 19.6 → 22.7 → 
 
 - **The millisecond outliers were the id index rehashing.** On the current version, `OB_BENCH_NO_RESERVE=1` brings them straight back (worst op 0.74–1.6 ms over three runs, 27 M ops/s), and `reserve()` removes them (12–16 µs, 38 M ops/s). The plain-`new` build shows the same thing, so it is the rehash and not the pool. That was the hypothesis in the previous version of this README, now tested.
 - **Tick-indexed levels were the biggest single win:** +36% throughput and a 30% lower mean for resting adds, because the best level is cached and finding any level is an array index rather than a tree walk.
-- **Clock resolution limits the percentiles.** On this machine `steady_clock` ticks every 41.7 ns (a 24 MHz counter), so p50 is "one tick" for every operation, and p99 values of 84 / 125 / 167 ns are 2 / 3 / 4 ticks. Percentiles are now reported mainly for the tail.
+- **Clock resolution limits the percentiles.** On Apple Silicon `steady_clock` ticks every 41.7 ns (a 24 MHz counter), so p50 is "one tick" for every operation, and p99 values of 84 / 125 / 167 ns are 2 / 3 / 4 ticks. Percentiles are now reported mainly for the tail.
 - **The mean is accurate below one tick.** Each sample is rounded to a whole tick, but where an operation starts relative to the next tick is effectively random, so the rounding averages out over hundreds of thousands of samples. "Mean − clock overhead" subtracts the measured cost of the two `now()` calls (~18 ns here). Throughput needs no clock per operation and is the cleanest number: 38.4 M ops/s is 26 ns per operation.
 - **The worst-case column varies run to run** (one Tier 1 run hit 514 µs while the other two stayed near 50–95 µs), which is consistent with the VM being descheduled. That is why it is reported as a range.
-- Numbers from a native macOS build (Apple Clang) or a bare-metal Linux box will differ.
+- The native macOS numbers above are faster than these VM numbers across the board; the VM table is kept because it is the only place where every step was measured on one setup.
 
 ## Limitations and next steps
 
@@ -186,4 +209,5 @@ The same steps with plain `operator new` instead of the pool: 19.6 → 22.7 → 
 - **Price band per side.** A side's resting prices must fit in 2^22 ticks. A sparse book (a few orders very far apart) makes the "next best" walk long; a bitmap of occupied levels would make it a few word scans.
 - **The trade callback is a `std::function`**, an indirect call on the hot path. A template parameter would let the compiler inline it, at the cost of making `OrderBook` a header-only class template. Not done yet; measure before and after.
 - **The id index is still a node-based hash map.** A flat open-addressing table (or an array indexed by id, when ids are dense) would remove a pointer chase from every cancel and modify.
+- **The benchmark's op stream depends on the standard library** (see the native section). Replacing `std::normal_distribution` and `std::uniform_int_distribution` with hand-written ones would make the workload identical on every platform.
 - **The pool is not thread-safe** and never returns memory to the OS; both are fine for a single-threaded book but would need revisiting with the SPSC design.
