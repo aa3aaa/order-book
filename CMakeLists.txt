@@ -40,3 +40,8 @@ add_executable(bench bench/bench.cpp)
 target_link_libraries(bench PRIVATE orderbook)
 add_executable(bench_nopool bench/bench.cpp)
 target_link_libraries(bench_nopool PRIVATE orderbook_nopool)
+
+# Minimal example of using the book as a library.
+add_executable(example examples/basic_usage.cpp)
+target_link_libraries(example PRIVATE orderbook)
+add_test(NAME example_runs COMMAND example)
