@@ -32,6 +32,24 @@ std::vector<LevelView> levels_of(const Book& book, std::size_t n) {
 
 OrderBook::OrderBook(TradeCallback on_trade) : on_trade_(std::move(on_trade)) {}
 
+void OrderBook::reserve(std::size_t max_resting_orders) {
+    index_.reserve(max_resting_orders);
+#if OB_USE_POOL
+    // Allocate that many nodes of each kind and free them again: the pools keep
+    // the memory, so later adds pop pre-grown blocks instead of growing mid-run.
+    // (The temporaries share the pools with the real containers: the allocator is stateless.)
+    {
+        OrderList orders;
+        for (std::size_t i = 0; i < max_resting_orders; ++i) orders.emplace_back();
+    }
+    {
+        Index dummy;
+        dummy.reserve(max_resting_orders);
+        for (std::size_t i = 0; i < max_resting_orders; ++i) dummy.emplace(i, Handle{});
+    }
+#endif
+}
+
 std::optional<LevelView> OrderBook::best_bid() const { return top_of(bids_); }
 
 std::optional<LevelView> OrderBook::best_ask() const { return top_of(asks_); }

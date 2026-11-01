@@ -143,6 +143,10 @@ ClockInfo calibrate_clock() {
     return {tick, static_cast<double>(sum / kSamples)};
 }
 
+// The book peaks at about 110k resting orders on this workload; reserve headroom.
+// Set OB_BENCH_NO_RESERVE=1 to measure without it.
+const std::size_t kReserveOrders = std::getenv("OB_BENCH_NO_RESERVE") ? 0 : 1u << 18;
+
 struct RunResult {
     double mops{};
     std::uint64_t trades{};
@@ -155,6 +159,7 @@ RunResult run_once(const std::vector<Op>& warmup, const std::vector<Op>& ops) {
 
     std::uint64_t trades = 0;  // printed at the end so the optimiser cannot drop the work
     ob::OrderBook book([&trades](const ob::Trade&) { ++trades; });
+    book.reserve(kReserveOrders);
     for (const Op& op : warmup) run_op(book, op);
     r.resting_after_warmup = book.order_count();
 
@@ -183,6 +188,7 @@ RunResult run_once(const std::vector<Op>& warmup, const std::vector<Op>& ops) {
     // Untimed pass for throughput: same operations, fresh book, same warm-up.
     std::uint64_t trades2 = 0;
     ob::OrderBook book2([&trades2](const ob::Trade&) { ++trades2; });
+    book2.reserve(kReserveOrders);
     for (const Op& op : warmup) run_op(book2, op);
     const auto w0 = Clock::now();
     for (const Op& op : ops) run_op(book2, op);

@@ -283,3 +283,16 @@ TEST_F(BookTest, ModifiedOrderCanStillBeCancelled) {
     EXPECT_TRUE(book.cancel(1));
     EXPECT_EQ(book.order_count(), 0u);
 }
+
+// ---------- reserve() ----------
+
+TEST_F(BookTest, ReserveChangesNothingVisible) {
+    book.reserve(10'000);
+    EXPECT_EQ(book.order_count(), 0u);
+    book.add(sell(1, 100, 5));
+    book.reserve(20'000);  // calling it again on a live book is safe
+    EXPECT_EQ(book.add(buy(2, 100, 3)), 0);
+    EXPECT_EQ(book.best_ask(), (LevelView{100, 2, 1}));
+    EXPECT_TRUE(book.cancel(1));
+    EXPECT_EQ(book.order_count(), 0u);
+}

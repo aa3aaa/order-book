@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <list>
+#include <memory>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -49,21 +50,31 @@ class OrderBook {
 
         std::size_t order_count() const noexcept { return index_.size(); }
 
+        // Pre-allocates for up to max_resting_orders resting orders, so the hot
+        // path never grows a container: the id index gets its buckets now (no
+        // rehash later), and in the pool build both node pools are grown to size
+        // up front instead of in chunks mid-run. Optional; call it before trading.
+        void reserve(std::size_t max_resting_orders);
+
     private:
 #if OB_USE_POOL
-        using OrderList = std::list<Order, PoolAllocator<Order>>;
+        template <class T> using Alloc = PoolAllocator<T>;
 #else
-        using OrderList = std::list<Order>;
+        template <class T> using Alloc = std::allocator<T>;
 #endif
+        using OrderList = std::list<Order, Alloc<Order>>;
         struct Level {
             Quantity total{0};
             OrderList orders;  // FIFO: front is the oldest
         };
         struct Handle {
-            Side side;
-            Price price;
-            OrderList::iterator it;  // points at the order's own node
+            Side side{};
+            Price price{};
+            OrderList::iterator it{};  // points at the order's own node
         };
+        // Index nodes come from the pool too: otherwise every add still calls new once.
+        using Index = std::unordered_map<OrderId, Handle, std::hash<OrderId>, std::equal_to<>,
+                                         Alloc<std::pair<const OrderId, Handle>>>;
         using Bids = std::map<Price, Level, std::greater<>>;  // highest price first
         using Asks = std::map<Price, Level>;                  // lowest price first
 
@@ -77,7 +88,7 @@ class OrderBook {
 
         Bids bids_;
         Asks asks_;
-        std::unordered_map<OrderId, Handle> index_;
+        Index index_;
         TradeCallback on_trade_;
         Sequence next_seq_{1};
 };
