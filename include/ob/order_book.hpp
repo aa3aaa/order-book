@@ -2,11 +2,11 @@
 #include <functional>
 #include <list>
 #include <memory>
-#include <map>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 #include "ob/pool_allocator.hpp"
+#include "ob/price_ladder.hpp"
 #include "ob/types.hpp"
 
 // 1: order-list nodes come from a fixed-size pool (default). 0: plain operator new.
@@ -31,6 +31,8 @@ class OrderBook {
         // filled, or if the remainder was cancelled because the order was Market
         // or IOC. Assigns the sequence number; orders with qty <= 0 are ignored.
         // Ids must be unique among resting orders.
+        // Throws std::length_error, before changing anything, if a Limit order's
+        // price would make its side's resting prices span more than ~4.2M ticks.
         Quantity add(Order order);
 
         // Removes a resting order. False if no order with that id is resting.
@@ -40,6 +42,7 @@ class OrderBook {
         // unchanged and the quantity does not go up; otherwise the order is
         // cancelled and re-added as a new Limit order, which may match at once.
         // False if the id is unknown or new_qty <= 0 (the book is unchanged).
+        // Throws std::length_error, as add() does, before changing anything.
         bool modify(OrderId id, Price new_price, Quantity new_qty);
 
         std::optional<LevelView> best_bid() const;
@@ -75,8 +78,8 @@ class OrderBook {
         // Index nodes come from the pool too: otherwise every add still calls new once.
         using Index = std::unordered_map<OrderId, Handle, std::hash<OrderId>, std::equal_to<>,
                                          Alloc<std::pair<const OrderId, Handle>>>;
-        using Bids = std::map<Price, Level, std::greater<>>;  // highest price first
-        using Asks = std::map<Price, Level>;                  // lowest price first
+        using Bids = PriceLadder<Level, true>;   // best = highest price
+        using Asks = PriceLadder<Level, false>;  // best = lowest price
 
         // Executes every trade the taker can make against book (the opposite
         // side), reporting each one and removing filled makers.
@@ -85,6 +88,9 @@ class OrderBook {
 
         // Puts an order with quantity left at the back of its price level.
         void rest(Order order);
+
+        // Throws std::length_error if a Limit order at this price could not rest.
+        void check_band(Side side, Price price) const;
 
         Bids bids_;
         Asks asks_;

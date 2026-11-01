@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <vector>
 #include "ob/order_book.hpp"
 
@@ -295,4 +296,66 @@ TEST_F(BookTest, ReserveChangesNothingVisible) {
     EXPECT_EQ(book.best_ask(), (LevelView{100, 2, 1}));
     EXPECT_TRUE(book.cancel(1));
     EXPECT_EQ(book.order_count(), 0u);
+}
+
+// ---------- tick-indexed levels: growth and the price band ----------
+
+TEST_F(BookTest, LevelsFarApartAreKeptInPriceOrder) {
+    book.add(buy(1, 100, 1));
+    book.add(buy(2, 1'000'000, 2));  // forces the bid array to grow upward
+    book.add(buy(3, 5, 3));          // and downward
+    const std::vector<LevelView> expected{{1'000'000, 2, 1}, {100, 1, 1}, {5, 3, 1}};
+    EXPECT_EQ(book.depth(Side::Buy, 10), expected);
+
+    EXPECT_EQ(book.add(market(4, Side::Sell, 6)), 0);
+    const std::vector<Trade> fills{{4, 2, 1'000'000, 2}, {4, 1, 100, 1}, {4, 3, 5, 3}};
+    EXPECT_EQ(trades, fills);
+    EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST_F(BookTest, CancelAndMatchStillWorkAfterTheArrayGrows) {
+    book.add(sell(1, 100, 5));
+    book.add(sell(2, 100, 5));
+    book.add(sell(3, 90'000, 5));  // growth moves level 100's orders to a new array
+    EXPECT_TRUE(book.cancel(1));   // the index's iterator for order 1 must still be valid
+    book.add(buy(4, 100, 5));
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0], (Trade{4, 2, 100, 5}));
+    EXPECT_EQ(book.best_ask(), (LevelView{90'000, 5, 1}));
+}
+
+TEST_F(BookTest, BestPriceSkipsGapsWhenTheBestLevelEmpties) {
+    book.add(sell(1, 100, 1));
+    book.add(sell(2, 150, 1));
+    book.add(sell(3, 400, 1));
+    EXPECT_TRUE(book.cancel(1));
+    EXPECT_EQ(book.best_ask()->price, 150);
+    book.add(buy(4, 150, 1));
+    EXPECT_EQ(book.best_ask()->price, 400);
+}
+
+TEST_F(BookTest, PriceBeyondTheBandIsRejectedBeforeAnythingChanges) {
+    constexpr ob::Price far = ob::Price{1} << 23;  // further than ~4.2M ticks from the resting bid
+    book.add(buy(1, 0, 5));
+    book.add(sell(2, 10, 5));
+    // This buy would cross the ask at 10, but could not rest beside the bid at 0.
+    EXPECT_THROW(book.add(buy(3, far, 8)), std::length_error);
+    EXPECT_TRUE(trades.empty());
+    EXPECT_EQ(book.best_ask(), (LevelView{10, 5, 1}));
+    EXPECT_EQ(book.order_count(), 2u);
+
+    EXPECT_THROW(book.modify(1, far, 5), std::length_error);
+    EXPECT_EQ(book.best_bid(), (LevelView{0, 5, 1}));  // order 1 still resting, unchanged
+
+    // Market and IOC orders never rest, so their price is not checked.
+    EXPECT_EQ(book.add(ioc(4, Side::Buy, far, 2)), 0);
+    EXPECT_EQ(book.best_ask(), (LevelView{10, 3, 1}));
+}
+
+TEST_F(BookTest, AnEmptySideCanRestartAtAnyPrice) {
+    constexpr ob::Price far = ob::Price{1} << 23;
+    book.add(buy(1, 0, 5));
+    EXPECT_TRUE(book.cancel(1));
+    EXPECT_EQ(book.add(buy(2, far, 5)), 5);  // nothing resting, so no band to break
+    EXPECT_EQ(book.best_bid(), (LevelView{far, 5, 1}));
 }
