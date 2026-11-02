@@ -454,3 +454,25 @@ TEST_F(BookTest, MovedOrderGoesToTheBackOfItsNewLevel) {
     EXPECT_EQ(book.best_ask(), (LevelView{100, 4, 1}));
     EXPECT_EQ(book.depth(Side::Sell, 10).size(), 1u);  // level 105 was emptied and removed
 }
+
+// ---------- level bitmap ----------
+
+TEST_F(BookTest, NextBestLevelIsFoundAcrossWideGapsAndWordEdges) {
+    // Prices chosen to sit at both ends of 64-bit bitmap words and far apart.
+    const std::vector<ob::Price> asks{1'000, 1'063, 1'064, 1'127, 1'128, 51'000, 900'000};
+    ob::OrderId id = 1;
+    for (auto px : asks) book.add(sell(id++, px, 1));
+    std::vector<ob::Price> seen;
+    for (std::size_t i = 0; i < asks.size(); ++i) {
+        seen.push_back(book.best_ask()->price);
+        book.add(market(100 + i, Side::Buy, 1));  // take the best level each time
+    }
+    EXPECT_EQ(seen, asks);
+    EXPECT_EQ(book.best_ask(), std::nullopt);
+
+    const std::vector<ob::Price> bids{900'000, 51'000, 1'128, 1'127, 1'064, 1'063, 1'000};
+    for (auto px : bids) book.add(buy(id++, px, 1));
+    std::vector<LevelView> expected;
+    for (auto px : bids) expected.push_back({px, 1, 1});
+    EXPECT_EQ(book.depth(Side::Buy, 100), expected);  // for_each walks the bitmap
+}

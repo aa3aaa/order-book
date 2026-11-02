@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -11,9 +12,10 @@ namespace ob {
 // price base_ + i. Finding the level for a price is an array index (O(1)), and
 // the best price is cached, so the matching loop never searches a tree.
 //
-//  - The best price moves only when its level empties; the next best is found by
-//    stepping one tick at a time toward worse prices. That walk is as long as the
-//    gap to the next occupied level, which is short in a liquid book.
+//  - A bitmap keeps one bit per price: set while the level has orders. The best
+//    price moves only when its level empties, and the next best is found by
+//    scanning that bitmap 64 prices per word with countl_zero / countr_zero, so a
+//    wide gap between levels costs a few word reads instead of a tick-by-tick walk.
 //  - The array grows (doubling, re-centred on the occupied prices) when a price
 //    lands outside it. A Level holds only indices into the order slab, so growth
 //    copies levels across and nothing that refers to an order has to change.
@@ -55,32 +57,31 @@ class PriceLadder {
 
         // Call after a level goes from no orders to some.
         void on_level_filled(Price price) noexcept {
+            set_bit(index_of(price));
             if (occupied_++ == 0 || better(price, best_)) best_ = price;
         }
 
         // Call after a level loses its last order.
         void on_level_emptied(Price price) noexcept {
+            clear_bit(index_of(price));
             if (--occupied_ == 0 || price != best_) return;
-            Price p = best_;
-            do { p = worse_by_one(p); } while (slot(p).empty());
-            best_ = p;
+            best_ = price_of(next_worse(index_of(price)));
         }
 
         // Calls f(price, level) for each non-empty level, best first, until f returns false.
         template <class F>
         void for_each(F&& f) const {
-            std::size_t seen = 0;
-            for (Price p = best_; seen < occupied_; p = worse_by_one(p)) {
-                const Level& level = slot(p);
-                if (level.empty()) continue;
-                ++seen;
-                if (!f(p, level)) return;
+            if (empty()) return;
+            std::size_t i = index_of(best_);
+            for (std::size_t seen = 1;; ++seen) {
+                if (!f(price_of(i), levels_[i])) return;
+                if (seen == occupied_) return;
+                i = next_worse(i);
             }
         }
 
     private:
         static constexpr bool better(Price a, Price b) noexcept { return IsBid ? a > b : a < b; }
-        static constexpr Price worse_by_one(Price p) noexcept { return IsBid ? p - 1 : p + 1; }
 
         // Number of ticks in [lo, hi], computed without signed overflow.
         static std::size_t span(Price lo, Price hi) noexcept {
@@ -91,15 +92,43 @@ class PriceLadder {
             return !levels_.empty() && price >= base_ &&
                    static_cast<std::uint64_t>(price) - static_cast<std::uint64_t>(base_) < levels_.size();
         }
-        Level& slot(Price price) noexcept { return levels_[static_cast<std::size_t>(price - base_)]; }
-        const Level& slot(Price price) const noexcept { return levels_[static_cast<std::size_t>(price - base_)]; }
+        std::size_t index_of(Price price) const noexcept { return static_cast<std::size_t>(price - base_); }
+        Price price_of(std::size_t i) const noexcept { return base_ + static_cast<Price>(i); }
+        Level& slot(Price price) noexcept { return levels_[index_of(price)]; }
+        const Level& slot(Price price) const noexcept { return levels_[index_of(price)]; }
 
-        // Lowest and highest occupied prices. O(array size): only used on the rare growth path.
+        // ---- occupancy bitmap ----
+        void set_bit(std::size_t i) noexcept { bits_[i >> 6] |= std::uint64_t{1} << (i & 63); }
+        void clear_bit(std::size_t i) noexcept { bits_[i >> 6] &= ~(std::uint64_t{1} << (i & 63)); }
+
+        // Highest occupied index below i. Precondition: one exists.
+        std::size_t next_lower(std::size_t i) const noexcept {
+            std::size_t w = i >> 6;
+            std::uint64_t m = bits_[w] & ((std::uint64_t{1} << (i & 63)) - 1);  // bits strictly below i
+            while (m == 0) m = bits_[--w];
+            return (w << 6) + 63 - static_cast<std::size_t>(std::countl_zero(m));
+        }
+
+        // Lowest occupied index above i. Precondition: one exists.
+        std::size_t next_higher(std::size_t i) const noexcept {
+            std::size_t w = i >> 6;
+            std::uint64_t m = bits_[w] & ~((std::uint64_t{2} << (i & 63)) - 1);  // bits strictly above i
+            while (m == 0) m = bits_[++w];
+            return (w << 6) + static_cast<std::size_t>(std::countr_zero(m));
+        }
+
+        // The next occupied level after i in the direction of worse prices.
+        std::size_t next_worse(std::size_t i) const noexcept { return IsBid ? next_lower(i) : next_higher(i); }
+
+        // Lowest and highest occupied prices. Precondition: !empty(). Scans the
+        // bitmap from both ends; only used on the rare growth path.
         std::pair<Price, Price> occupied_bounds() const noexcept {
-            std::size_t lo = 0, hi = levels_.size() - 1;
-            while (levels_[lo].empty()) ++lo;
-            while (levels_[hi].empty()) --hi;
-            return {base_ + static_cast<Price>(lo), base_ + static_cast<Price>(hi)};
+            std::size_t lo = 0, hi = bits_.size() - 1;
+            while (bits_[lo] == 0) ++lo;
+            while (bits_[hi] == 0) --hi;
+            const std::size_t first = (lo << 6) + static_cast<std::size_t>(std::countr_zero(bits_[lo]));
+            const std::size_t last = (hi << 6) + 63 - static_cast<std::size_t>(std::countl_zero(bits_[hi]));
+            return {price_of(first), price_of(last)};
         }
 
         // Builds a new array covering the occupied prices and `price`, with slack on
@@ -116,19 +145,24 @@ class PriceLadder {
             const Price new_base = lo - static_cast<Price>((size - need) / 2);
 
             std::vector<Level> fresh(size);
+            std::vector<std::uint64_t> fresh_bits((size + 63) / 64, 0);
             if (!empty()) {
                 for (Price p = lo; p <= hi; ++p) {
                     if (!in_range(p)) continue;  // `price` itself may be outside the old array
                     const Level& from = slot(p);
                     if (from.empty()) continue;
-                    fresh[static_cast<std::size_t>(p - new_base)] = from;
+                    const auto j = static_cast<std::size_t>(p - new_base);
+                    fresh[j] = from;
+                    fresh_bits[j >> 6] |= std::uint64_t{1} << (j & 63);
                 }
             }
             levels_.swap(fresh);
+            bits_.swap(fresh_bits);
             base_ = new_base;
         }
 
         std::vector<Level> levels_;
+        std::vector<std::uint64_t> bits_;  // bit i set <=> levels_[i] has orders
         Price base_{0};
         Price best_{0};
         std::size_t occupied_{0};  // number of non-empty levels
