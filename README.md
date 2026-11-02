@@ -4,7 +4,7 @@
 
 A limit order book and matching engine in C++20: price-time priority, limit / market / IOC orders, O(1) cancel and modify, tick-indexed price levels with an occupancy bitmap, and every resting order in one slab linked by 32-bit indices. It is checked by 43 GoogleTest unit tests and two differential tests against a naive reference book (100,000 operations in a narrow band, 30,000 with wide, drifting prices), and measured by a latency benchmark.
 
-**Results** (MacBook Air, Apple Silicon; Linux VM, GCC 11.4): **52.4 M ops/s** with the default `-O3` build and **64.5 M ops/s** with profile-guided optimisation, about 15–19 ns per operation, up from 20.7 M ops/s at the start of the latency work. The full history, step by step, is [below](#benchmark).
+**Results** (MacBook Air, Apple Silicon, native macOS, Apple Clang 21): **54.9 M ops/s** with the default `-O3` build and **61.9 M ops/s** with profile-guided optimisation, 16–18 ns per operation. Worst single operation over a million: 2–27 µs. That is up from 44.7 M ops/s natively at the end of the first round of latency work, and 20.7 M ops/s (in a Linux VM) at its start. The full history, step by step, is [below](#benchmark).
 
 ## Using the order book
 
@@ -186,6 +186,20 @@ data/sample.csv                example replay input
 ## Benchmark
 
 **Method.** One million operations are generated up front from a seeded RNG (70% limit adds with prices ~ Normal(10,000, 30) ticks and quantity 1–100; 20% cancels and 10% modifies of one of the last 1,024 ids added, some of which have already filled), so generation is never timed. 100,000 warm-up operations run first; the book peaks at about 110,000 resting orders. Each timed operation is bracketed by `std::chrono::steady_clock::now()`, and adds are split into those that rested without trading and those that traded. Throughput comes from a second, untimed pass over the same operations on a fresh book. The whole measurement runs three times on fresh books and the median run by throughput is reported.
+
+### Native macOS, end of round 2 (median run of 3)
+
+MacBook Air (Apple Silicon), macOS, Apple Clang 21.0 (`clang-2100.3.34.2`).
+
+| Build | Throughput | ns per op | Resting add mean | Worst single op (3 runs) |
+| --- | ---: | ---: | ---: | ---: |
+| End of round 1 (`std::list` + pool) | 44.7 M ops/s | 22.4 | 22.5 ns | 11–19 µs |
+| End of round 2, `-O3` (CMake Release) | **54.9 M ops/s** | 18.2 | 22.9 ns | 2.3–27 µs |
+| End of round 2, PGO + `OB_NATIVE` + `OB_LTO` (`scripts/pgo_build.sh`) | **61.9 M ops/s** | 16.1 | 18.6 ns | 1.2–46 µs |
+
+- **Round 2 is worth +23% natively**, about the same as in the VM. PGO adds a further +13% here, against +23% in the VM. Apple Clang's default output seems to leave less on the table.
+- **The resting-add mean barely moved while throughput rose.** The mean includes the two `now()` calls around each operation (13.6–15.7 ns here), which now cost almost as much as the operation itself. Throughput is the figure to compare.
+- **Run 1 of both builds had a p99.9 of ~1.5 µs in every operation type**, while runs 2 and 3 measured 42–84 ns for resting adds. As before, a tail that hits everything at once points at the machine (macOS scheduling, performance vs efficiency cores) rather than the book.
 
 ### Round 2: slab, index, callback, modify, bitmap, compiler (Linux VM, median of 3 runs)
 
