@@ -53,13 +53,7 @@ class BasicOrderBook {
         bool cancel(OrderId id) {
             const NodeRef r = index_erase(id);  // one chain walk finds and unlinks it
             if (r == kNil) return false;
-            const Node& n = nodes_[r];
-            auto remove = [&](auto& book) {
-                Level& level = book.at(n.price);
-                unlink(level, r);
-                if (level.empty()) book.on_level_emptied(n.price);
-            };
-            if (n.side == Side::Buy) remove(bids_); else remove(asks_);
+            detach(r);
             free_node(r);
             return true;
         }
@@ -84,17 +78,33 @@ class BasicOrderBook {
                 return true;
             }
 
-            // Anything else loses priority: cancel, then re-add as a fresh Limit order.
-            const Side side = n.side;     // copied out: cancel() frees the node
+            // Anything else loses priority. It behaves exactly like cancel + add of
+            // a new Limit order, but the order keeps its slab node and index entry:
+            // unlink it from its level, match it as a taker, then link whatever is
+            // left onto the back of its new level. That saves an index erase and
+            // re-insert and a free + allocate on every price change.
+            const Side side = n.side;
             check_band(side, new_price);  // throw now, while the order is still resting untouched
-            cancel(id);
-            Order replacement;
-            replacement.id = id;
-            replacement.side = side;
-            replacement.type = OrderType::Limit;
-            replacement.price = new_price;
-            replacement.qty = new_qty;
-            add(replacement);
+            detach(r);
+
+            Order taker;
+            taker.id = id;
+            taker.side = side;
+            taker.type = OrderType::Limit;
+            taker.price = new_price;
+            taker.qty = new_qty;
+            taker.seq = next_seq_++;  // a fresh sequence: it has lost its place
+            if (side == Side::Buy) match(taker, asks_); else match(taker, bids_);
+
+            if (taker.qty > 0) {
+                Node& moved = nodes_[r];
+                moved.price = new_price;
+                moved.qty = taker.qty;
+                attach(r);
+            } else {
+                index_erase(id);  // fully filled while moving
+                free_node(r);
+            }
             return true;
         }
 
@@ -202,12 +212,29 @@ class BasicOrderBook {
             n.qty = order.qty;
             n.side = order.side;
             index_insert(r);
+            attach(r);
+        }
+
+        // Links a node onto the back of the level at its price (add() or modify()
+        // already checked the band), or takes it off its level.
+        void attach(NodeRef r) {
+            const Node& n = nodes_[r];
             auto put = [&](auto& book) {
-                Level& level = book.get_or_create(order.price);  // add() already checked the band
+                Level& level = book.get_or_create(n.price);
                 push_back(level, r);
-                if (level.count == 1) book.on_level_filled(order.price);
+                if (level.count == 1) book.on_level_filled(n.price);
             };
-            if (order.side == Side::Buy) put(bids_); else put(asks_);
+            if (n.side == Side::Buy) put(bids_); else put(asks_);
+        }
+
+        void detach(NodeRef r) noexcept {
+            const Node& n = nodes_[r];
+            auto take = [&](auto& book) {
+                Level& level = book.at(n.price);
+                unlink(level, r);
+                if (level.empty()) book.on_level_emptied(n.price);
+            };
+            if (n.side == Side::Buy) take(bids_); else take(asks_);
         }
 
         // Throws std::length_error if a Limit order at this price could not rest.

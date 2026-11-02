@@ -429,3 +429,28 @@ TEST(BasicOrderBookTest, AnyCallableWorksAsTheCallback) {
     book.add(buy(2, 100, 5));
     EXPECT_EQ(fills, 1);
 }
+
+// ---------- modify that moves the node ----------
+
+TEST_F(BookTest, ModifyThatFullyFillsRemovesTheOrder) {
+    book.add(buy(1, 100, 5));
+    book.add(sell(2, 102, 10));
+    EXPECT_TRUE(book.modify(1, 102, 5));  // moves up and is filled completely
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0], (Trade{1, 2, 102, 5}));
+    EXPECT_EQ(book.order_count(), 1u);
+    EXPECT_FALSE(book.cancel(1));  // gone from the index too
+    EXPECT_EQ(book.best_bid(), std::nullopt);
+    EXPECT_EQ(book.best_ask(), (LevelView{102, 5, 1}));
+}
+
+TEST_F(BookTest, MovedOrderGoesToTheBackOfItsNewLevel) {
+    book.add(sell(1, 105, 5));
+    book.add(sell(2, 100, 5));
+    EXPECT_TRUE(book.modify(1, 100, 5));  // joins level 100 behind order 2
+    book.add(buy(3, 100, 6));
+    const std::vector<Trade> expected{{3, 2, 100, 5}, {3, 1, 100, 1}};
+    EXPECT_EQ(trades, expected);
+    EXPECT_EQ(book.best_ask(), (LevelView{100, 4, 1}));
+    EXPECT_EQ(book.depth(Side::Sell, 10).size(), 1u);  // level 105 was emptied and removed
+}
