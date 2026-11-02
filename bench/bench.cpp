@@ -216,7 +216,10 @@ int main(int argc, char** argv) {
     constexpr std::size_t warmup_ops = 100'000;
 
     const auto warmup = generate(warmup_ops, 1, 1);
-    const auto ops = generate(timed_ops, 2, warmup_ops + 1);
+    // OB_BENCH_SEED changes the timed stream; the PGO script trains on a different
+    // seed from the one it measures, so the profile is not fitted to the exact ops.
+    const std::uint64_t seed = std::getenv("OB_BENCH_SEED") ? std::strtoull(std::getenv("OB_BENCH_SEED"), nullptr, 10) : 2;
+    const auto ops = generate(timed_ops, seed, warmup_ops + 1);
     const ClockInfo clock = calibrate_clock();
 
     std::printf("order book benchmark  (pool allocator: %s, compiler: %s)\n",

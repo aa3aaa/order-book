@@ -5,9 +5,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        sanitize: [OFF, ON]
+        include:
+          - name: release
+            flags: ""
+          - name: asan-ubsan
+            flags: "-DOB_SANITIZE=ON"
+          - name: native-lto
+            flags: "-DOB_NATIVE=ON -DOB_LTO=ON"
+    name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOB_SANITIZE=${{ matrix.sanitize }}
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.flags }}
       - run: cmake --build build -j
       - run: ctest --test-dir build --output-on-failure

@@ -10,6 +10,52 @@ endif()
 
 option(OB_SANITIZE "AddressSanitizer + UBSan" OFF)
 
+# ---- Optimisation switches (all off by default; see README "Compiler settings") ----
+option(OB_NATIVE "Tune for this machine's CPU (-march=native or -mcpu=native)" OFF)
+option(OB_LTO "Link-time optimisation, so calls into the library can be inlined" OFF)
+set(OB_PGO "" CACHE STRING "Profile-guided optimisation phase: empty, GENERATE or USE (scripts/pgo_build.sh drives it)")
+set(OB_PGO_DIR "${CMAKE_BINARY_DIR}/pgo" CACHE PATH "Where PGO profiles are written and read")
+
+include(CheckCXXCompilerFlag)
+if(OB_NATIVE)
+  check_cxx_compiler_flag(-march=native OB_HAS_MARCH_NATIVE)
+  check_cxx_compiler_flag(-mcpu=native OB_HAS_MCPU_NATIVE)
+  if(OB_HAS_MARCH_NATIVE)
+    add_compile_options(-march=native)
+  elseif(OB_HAS_MCPU_NATIVE)
+    add_compile_options(-mcpu=native)
+  else()
+    message(WARNING "OB_NATIVE: compiler accepts neither -march=native nor -mcpu=native")
+  endif()
+endif()
+
+if(OB_LTO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT OB_IPO_OK OUTPUT OB_IPO_MSG)
+  if(OB_IPO_OK)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  else()
+    message(WARNING "OB_LTO: not supported here: ${OB_IPO_MSG}")
+  endif()
+endif()
+
+if(OB_PGO STREQUAL "GENERATE")
+  add_compile_options(-fprofile-generate=${OB_PGO_DIR})
+  add_link_options(-fprofile-generate=${OB_PGO_DIR})
+elseif(OB_PGO STREQUAL "USE")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Clang needs the raw profiles merged first (the script does this).
+    add_compile_options(-fprofile-use=${OB_PGO_DIR}/merged.profdata
+                        -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+    add_link_options(-fprofile-use=${OB_PGO_DIR}/merged.profdata)
+  else()
+    add_compile_options(-fprofile-use=${OB_PGO_DIR} -fprofile-correction -Wno-missing-profile)
+    add_link_options(-fprofile-use=${OB_PGO_DIR})
+  endif()
+elseif(NOT OB_PGO STREQUAL "")
+  message(FATAL_ERROR "OB_PGO must be empty, GENERATE or USE (got '${OB_PGO}')")
+endif()
+
 # The book is built twice: `orderbook` allocates list nodes from the pool
 # allocator (the default), `orderbook_nopool` uses plain operator new. Both
 # run the full test suite; the benchmark is built against each to compare.
