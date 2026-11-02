@@ -15,13 +15,13 @@ namespace ob {
 //    stepping one tick at a time toward worse prices. That walk is as long as the
 //    gap to the next occupied level, which is short in a liquid book.
 //  - The array grows (doubling, re-centred on the occupied prices) when a price
-//    lands outside it. Growth moves each level's orders with list::splice, which
-//    keeps every iterator valid, so the id index never has to be rebuilt.
+//    lands outside it. A Level holds only indices into the order slab, so growth
+//    copies levels across and nothing that refers to an order has to change.
 //  - Empty regions are dropped when the array is rebuilt, but a side's occupied
 //    prices must fit within kMaxSpan ticks. OrderBook checks can_hold() before it
 //    changes anything, so a price outside that band is rejected cleanly.
 //
-// Level must have a `Quantity total` and an `orders` list.
+// Level must be copyable and have `bool empty() const`.
 template <class Level, bool IsBid>
 class PriceLadder {
     public:
@@ -62,7 +62,7 @@ class PriceLadder {
         void on_level_emptied(Price price) noexcept {
             if (--occupied_ == 0 || price != best_) return;
             Price p = best_;
-            do { p = worse_by_one(p); } while (slot(p).orders.empty());
+            do { p = worse_by_one(p); } while (slot(p).empty());
             best_ = p;
         }
 
@@ -72,7 +72,7 @@ class PriceLadder {
             std::size_t seen = 0;
             for (Price p = best_; seen < occupied_; p = worse_by_one(p)) {
                 const Level& level = slot(p);
-                if (level.orders.empty()) continue;
+                if (level.empty()) continue;
                 ++seen;
                 if (!f(p, level)) return;
             }
@@ -97,13 +97,13 @@ class PriceLadder {
         // Lowest and highest occupied prices. O(array size): only used on the rare growth path.
         std::pair<Price, Price> occupied_bounds() const noexcept {
             std::size_t lo = 0, hi = levels_.size() - 1;
-            while (levels_[lo].orders.empty()) ++lo;
-            while (levels_[hi].orders.empty()) --hi;
+            while (levels_[lo].empty()) ++lo;
+            while (levels_[hi].empty()) --hi;
             return {base_ + static_cast<Price>(lo), base_ + static_cast<Price>(hi)};
         }
 
         // Builds a new array covering the occupied prices and `price`, with slack on
-        // both sides, and splices every level's orders across.
+        // both sides, and copies every occupied level across.
         void rebuild_around(Price price) {
             Price lo = price, hi = price;
             if (!empty()) {
@@ -119,11 +119,9 @@ class PriceLadder {
             if (!empty()) {
                 for (Price p = lo; p <= hi; ++p) {
                     if (!in_range(p)) continue;  // `price` itself may be outside the old array
-                    Level& from = slot(p);
-                    if (from.orders.empty()) continue;
-                    Level& to = fresh[static_cast<std::size_t>(p - new_base)];
-                    to.total = from.total;
-                    to.orders.splice(to.orders.end(), from.orders);  // iterators stay valid
+                    const Level& from = slot(p);
+                    if (from.empty()) continue;
+                    fresh[static_cast<std::size_t>(p - new_base)] = from;
                 }
             }
             levels_.swap(fresh);

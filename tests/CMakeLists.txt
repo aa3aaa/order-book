@@ -15,15 +15,6 @@ else()
   set(OB_TEST_ENV "")
 endif()
 
-set(OB_TEST_SOURCES order_book_test.cpp differential_test.cpp pool_allocator_test.cpp)
-
-# Same tests against both builds of the book. The pool hides use-after-free from
-# AddressSanitizer (freed nodes go back to the pool, not to malloc), so the
-# no-pool run is the one that lets ASan see every node.
-add_executable(ob_tests ${OB_TEST_SOURCES})
+add_executable(ob_tests order_book_test.cpp differential_test.cpp)
 target_link_libraries(ob_tests PRIVATE orderbook GTest::gtest_main)
 gtest_discover_tests(ob_tests PROPERTIES ENVIRONMENT "${OB_TEST_ENV}")
-
-add_executable(ob_tests_nopool ${OB_TEST_SOURCES})
-target_link_libraries(ob_tests_nopool PRIVATE orderbook_nopool GTest::gtest_main)
-gtest_discover_tests(ob_tests_nopool TEST_PREFIX "nopool." PROPERTIES ENVIRONMENT "${OB_TEST_ENV}")

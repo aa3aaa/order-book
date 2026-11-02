@@ -1,19 +1,10 @@
 #pragma once
+#include <cstdint>
 #include <functional>
-#include <list>
-#include <memory>
 #include <optional>
-#include <unordered_map>
 #include <vector>
-#include "ob/pool_allocator.hpp"
 #include "ob/price_ladder.hpp"
 #include "ob/types.hpp"
-
-// 1: order-list nodes come from a fixed-size pool (default). 0: plain operator new.
-// Set by CMake per library target; both builds pass the same tests.
-#ifndef OB_USE_POOL
-#define OB_USE_POOL 1
-#endif
 
 namespace ob {
 
@@ -51,33 +42,45 @@ class OrderBook {
         // Up to n levels on one side, best first.
         std::vector<LevelView> depth(Side side, std::size_t n) const;
 
-        std::size_t order_count() const noexcept { return index_.size(); }
+        std::size_t order_count() const noexcept { return live_; }
 
         // Pre-allocates for up to max_resting_orders resting orders, so the hot
-        // path never grows a container: the id index gets its buckets now (no
-        // rehash later), and in the pool build both node pools are grown to size
-        // up front instead of in chunks mid-run. Optional; call it before trading.
+        // path never grows a container: the order slab and the id index's
+        // bucket array are sized now (no reallocation or rehash mid-run).
+        // Optional; call it before trading.
         void reserve(std::size_t max_resting_orders);
 
     private:
-#if OB_USE_POOL
-        template <class T> using Alloc = PoolAllocator<T>;
-#else
-        template <class T> using Alloc = std::allocator<T>;
-#endif
-        using OrderList = std::list<Order, Alloc<Order>>;
+        // ---- Orders live in one slab and refer to each other by index ----
+        //
+        // Every resting order is one Node in nodes_. A Node is linked into two
+        // singly-owned lists at once, both by 32-bit index rather than pointer:
+        //   prev/next  the FIFO queue of its price level (time priority)
+        //   hnext      its bucket's chain in the id index
+        // Freed nodes go on a free list threaded through `next`, so allocation
+        // is a pop and freeing is a push: this slab is the pool allocator,
+        // specialised to one type. Indices stay valid when the vector grows.
+        using NodeRef = std::uint32_t;
+        static constexpr NodeRef kNil = 0xFFFF'FFFFu;
+
+        struct Node {
+            OrderId id{};
+            Price price{};
+            Quantity qty{};
+            NodeRef prev{kNil};
+            NodeRef next{kNil};
+            NodeRef hnext{kNil};
+            Side side{Side::Buy};
+        };  // 40 bytes: no type (a resting order is always Limit) and no seq (queue position is the priority)
+
         struct Level {
             Quantity total{0};
-            OrderList orders;  // FIFO: front is the oldest
+            NodeRef head{kNil};  // oldest order
+            NodeRef tail{kNil};  // newest order
+            std::uint32_t count{0};
+            bool empty() const noexcept { return count == 0; }
         };
-        struct Handle {
-            Side side{};
-            Price price{};
-            OrderList::iterator it{};  // points at the order's own node
-        };
-        // Index nodes come from the pool too: otherwise every add still calls new once.
-        using Index = std::unordered_map<OrderId, Handle, std::hash<OrderId>, std::equal_to<>,
-                                         Alloc<std::pair<const OrderId, Handle>>>;
+
         using Bids = PriceLadder<Level, true>;   // best = highest price
         using Asks = PriceLadder<Level, false>;  // best = lowest price
 
@@ -87,14 +90,36 @@ class OrderBook {
         void match(Order& taker, Book& book);
 
         // Puts an order with quantity left at the back of its price level.
-        void rest(Order order);
+        void rest(const Order& order);
 
         // Throws std::length_error if a Limit order at this price could not rest.
         void check_band(Side side, Price price) const;
 
+        // Slab.
+        NodeRef alloc_node();
+        void free_node(NodeRef r) noexcept;
+
+        // Level FIFO.
+        void push_back(Level& level, NodeRef r) noexcept;
+        void unlink(Level& level, NodeRef r) noexcept;
+
+        // Id index: a bucket array of chain heads. The bucket is id & mask:
+        // exchange ids count up, so recent orders land in neighbouring buckets
+        // and stay in cache, and with at least one bucket per live order the
+        // chains are almost always 0 or 1 long.
+        NodeRef index_find(OrderId id) const noexcept;
+        void index_insert(NodeRef r);
+        NodeRef index_erase(OrderId id) noexcept;  // returns the node, or kNil if absent
+        void index_rebuild(std::size_t buckets);
+
+        std::vector<Node> nodes_;
+        NodeRef free_head_{kNil};
+        std::vector<NodeRef> buckets_;
+        std::size_t bucket_mask_{0};
+        std::size_t live_{0};
+
         Bids bids_;
         Asks asks_;
-        Index index_;
         TradeCallback on_trade_;
         Sequence next_seq_{1};
 };

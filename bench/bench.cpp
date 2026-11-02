@@ -222,8 +222,7 @@ int main(int argc, char** argv) {
     const auto ops = generate(timed_ops, seed, warmup_ops + 1);
     const ClockInfo clock = calibrate_clock();
 
-    std::printf("order book benchmark  (pool allocator: %s, compiler: %s)\n",
-                OB_USE_POOL ? "on" : "off", __VERSION__);
+    std::printf("order book benchmark  (compiler: %s)\n", __VERSION__);
     std::printf("clock: tick %lld ns, one now() pair costs %.1f ns on average\n",
                 static_cast<long long>(clock.tick_ns), clock.overhead_ns);
 

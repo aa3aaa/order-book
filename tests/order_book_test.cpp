@@ -359,3 +359,39 @@ TEST_F(BookTest, AnEmptySideCanRestartAtAnyPrice) {
     EXPECT_EQ(book.add(buy(2, far, 5)), 5);  // nothing resting, so no band to break
     EXPECT_EQ(book.best_bid(), (LevelView{far, 5, 1}));
 }
+
+// ---------- slab and id index ----------
+
+// A million orders with consecutive ids, half cancelled, the rest filled: the
+// shape that breaks open addressing with an order-preserving hash. Must stay fast.
+TEST_F(BookTest, ManyConsecutiveIdsStayFast) {
+    constexpr ob::OrderId n = 1'000'000;
+    for (ob::OrderId id = 1; id <= n; ++id) book.add(sell(id, 100 + static_cast<ob::Price>(id % 50), 1));
+    EXPECT_EQ(book.order_count(), n);
+    for (ob::OrderId id = 1; id <= n; id += 2) ASSERT_TRUE(book.cancel(id));
+    EXPECT_EQ(book.order_count(), n / 2);
+    EXPECT_EQ(book.add(market(n + 1, Side::Buy, static_cast<ob::Quantity>(n))), 0);
+    EXPECT_EQ(trades.size(), n / 2);
+    EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST_F(BookTest, FreedNodesAreReusedAndIdsCanComeBack) {
+    for (int round = 0; round < 3; ++round) {
+        for (ob::OrderId id = 1; id <= 100; ++id) book.add(buy(id, 50 + static_cast<ob::Price>(id), 2));
+        for (ob::OrderId id = 1; id <= 100; ++id) ASSERT_TRUE(book.cancel(id));
+        EXPECT_EQ(book.order_count(), 0u);
+        EXPECT_EQ(book.best_bid(), std::nullopt);
+    }
+    book.add(buy(7, 100, 3));  // a reused id after its earlier order was cancelled
+    EXPECT_EQ(book.best_bid(), (LevelView{100, 3, 1}));
+}
+
+TEST_F(BookTest, IdsThatShareABucketAreKeptApart) {
+    // With 16 buckets, ids 1, 17, 33... all hash to bucket 1.
+    for (ob::OrderId id = 1; id <= 1 + 16 * 9; id += 16) book.add(sell(id, 100, 1));
+    EXPECT_TRUE(book.cancel(33));
+    EXPECT_FALSE(book.cancel(33));
+    EXPECT_TRUE(book.modify(65, 100, 1));
+    EXPECT_TRUE(book.cancel(1));
+    EXPECT_EQ(book.best_ask(), (LevelView{100, 8, 8}));
+}
