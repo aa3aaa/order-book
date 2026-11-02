@@ -99,7 +99,8 @@ std::vector<Op> generate(std::size_t count, std::uint64_t seed, ob::OrderId firs
     return ops;
 }
 
-inline void run_op(ob::OrderBook& book, const Op& op) {
+template <class Book>
+inline void run_op(Book& book, const Op& op) {
     switch (op.kind) {
         case OpKind::Add: book.add(op.order); break;
         case OpKind::Cancel: book.cancel(op.order.id); break;
@@ -158,7 +159,8 @@ RunResult run_once(const std::vector<Op>& warmup, const std::vector<Op>& ops) {
     RunResult r;
 
     std::uint64_t trades = 0;  // printed at the end so the optimiser cannot drop the work
-    ob::OrderBook book([&trades](const ob::Trade&) { ++trades; });
+    // BasicOrderBook deduces the lambda's type, so the callback is inlined.
+    ob::BasicOrderBook book([&trades](const ob::Trade&) { ++trades; });
     book.reserve(kReserveOrders);
     for (const Op& op : warmup) run_op(book, op);
     r.resting_after_warmup = book.order_count();
@@ -187,7 +189,7 @@ RunResult run_once(const std::vector<Op>& warmup, const std::vector<Op>& ops) {
 
     // Untimed pass for throughput: same operations, fresh book, same warm-up.
     std::uint64_t trades2 = 0;
-    ob::OrderBook book2([&trades2](const ob::Trade&) { ++trades2; });
+    ob::BasicOrderBook book2([&trades2](const ob::Trade&) { ++trades2; });
     book2.reserve(kReserveOrders);
     for (const Op& op : warmup) run_op(book2, op);
     const auto w0 = Clock::now();

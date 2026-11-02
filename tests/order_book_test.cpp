@@ -395,3 +395,37 @@ TEST_F(BookTest, IdsThatShareABucketAreKeptApart) {
     EXPECT_TRUE(book.cancel(1));
     EXPECT_EQ(book.best_ask(), (LevelView{100, 8, 8}));
 }
+
+// ---------- template callback ----------
+
+// The lambda-typed book (callback inlined) must behave exactly like the
+// std::function one on the same orders.
+TEST(BasicOrderBookTest, LambdaCallbackBookMatchesStdFunctionBook) {
+    std::vector<Trade> a, b;
+    ob::OrderBook fn_book([&](const Trade& t) { a.push_back(t); });
+    ob::BasicOrderBook lambda_book([&](const Trade& t) { b.push_back(t); });
+    for (ob::OrderId id = 1; id <= 2000; ++id) {
+        const auto px = static_cast<ob::Price>(95 + id * 7 % 11);
+        const auto qty = static_cast<ob::Quantity>(1 + id % 13);
+        const auto o = id % 2 ? sell(id, px, qty) : buy(id, px, qty);
+        ASSERT_EQ(fn_book.add(o), lambda_book.add(o));
+        if (id % 5 == 0) { ASSERT_EQ(fn_book.cancel(id - 3), lambda_book.cancel(id - 3)); }
+        if (id % 7 == 0) { ASSERT_EQ(fn_book.modify(id - 2, px, qty), lambda_book.modify(id - 2, px, qty)); }
+    }
+    EXPECT_EQ(a, b);
+    EXPECT_GT(a.size(), 100u);
+    EXPECT_EQ(fn_book.depth(Side::Buy, 20), lambda_book.depth(Side::Buy, 20));
+    EXPECT_EQ(fn_book.depth(Side::Sell, 20), lambda_book.depth(Side::Sell, 20));
+}
+
+TEST(BasicOrderBookTest, AnyCallableWorksAsTheCallback) {
+    struct Counter {
+        int* fills;
+        void operator()(const Trade&) const { ++*fills; }
+    };
+    int fills = 0;
+    ob::BasicOrderBook<Counter> book(Counter{&fills});
+    book.add(sell(1, 100, 5));
+    book.add(buy(2, 100, 5));
+    EXPECT_EQ(fills, 1);
+}
