@@ -18,3 +18,17 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.flags }}
       - run: cmake --build build -j
       - run: ctest --test-dir build --output-on-failure
+
+  # Profile-guided build: instrumented build, training run, rebuild with the
+  # profile (scripts/pgo_build.sh), then the full test suite on the optimised
+  # binaries. This checks the PGO pipeline works and that the profile-driven
+  # build gives the same answers; timings on shared runners mean nothing.
+  pgo:
+    runs-on: ubuntu-latest
+    name: pgo
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/pgo_build.sh
+      - run: cmake --build build/pgo -j
+      - run: ctest --test-dir build/pgo --output-on-failure
+      - run: ./build/pgo/bench 200000 1

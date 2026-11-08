@@ -93,7 +93,7 @@ Always run it from the Release build, on mains power, with the machine otherwise
 
 ### Compiler settings
 
-Three opt-in switches make the compiler do more. They are off by default, and CI builds and tests each one.
+Three opt-in switches make the compiler do more. They are off by default, and CI builds and tests each one (native + LTO together, and the full PGO pipeline).
 
 ```bash
 # tune for this CPU and optimise across files (lets bench inline calls into the library)
@@ -166,7 +166,7 @@ After every operation each test compares the return value, the trades emitted, b
 - not updating a moved order's price fails at operation 12;
 - leaving a level's tail stale after an unlink, or never clearing a level's bitmap bit, crashes the tests.
 
-CI runs everything under AddressSanitizer + UBSan, with `_GLIBCXX_ASSERTIONS` so that an out-of-range slab index fails loudly instead of silently reading another order. It also runs a build with `OB_NATIVE` and `OB_LTO`.
+CI runs everything under AddressSanitizer + UBSan, with `_GLIBCXX_ASSERTIONS` so that an out-of-range slab index fails loudly instead of silently reading another order. It also runs a build with `OB_NATIVE` and `OB_LTO`, and a PGO build (`scripts/pgo_build.sh`, then every test on the profile-optimised binaries) so the profile-driven pipeline cannot rot unnoticed.
 
 Layout:
 
